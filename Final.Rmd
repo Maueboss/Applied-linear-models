@@ -1,0 +1,478 @@
+---
+title: "Final_Assignment"
+author: "Manuel Bottino"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: pdflatex
+    pandoc_args: [
+      "--variable=fontsize:10pt",
+      "--variable=mainfont:Arial Narrow",
+      "--variable=monofont:Courier",
+      "--variable=mathfont:Arial"
+      ]
+toc: true
+fig_caption: yes
+number_sections: true
+urlcolor: blue
+---
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Load the knitr package
+library(knitr)
+library(rstudioapi)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+knitr::opts_knit$set(root.dir = dirname(rstudioapi::getSourceEditorContext()$path))
+# Set the global chunk options
+opts_chunk$set(out.width = "50%", fig.align='center')
+opts_chunk$set(echo =TRUE, size = 3)
+
+
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(bookdown)
+library(plotly)
+library(rstanarm)
+library(Cairo)
+#library(rgl)
+#library(plot3D)
+library(effects)
+library(car)
+library(faraway)
+library(leaps)
+library(ROCR)
+library(RColorBrewer)
+library(cowplot)
+library(lmtest)
+```
+
+
+# 1. and 2. Introduction
+
+>Scientists agree on the fact that climate change is a major issue. We, as data scientists, can help those who do not feel this urge to intervene rapidly and effectively. More than often these are people in power who could make a change. Our tools are simple but powerful. Through my assignment, I try to explore more in deep the major causes of global warming using simple tools.
+
+## Data explanation
+
+My idea for tackling the issue is to gather data on max temperature, various indicators of pollution, and environmental disasters for various countries. The reasoning I have followed is that of selecting 17 representative countries (sample). I included both countries mostly affected (now or in the future, Myanmar for instance) by global warnings and its effects, and those who pollute the most (China for instance).
+
+>The methodology used to measure the different variables are:
+
+- **Temperature and precipitation** -> CRU TS (Climatic Research Unit gridded Time Series) is the most widely used observational climate dataset. Data is presented on a 0.5° latitude by 0.5° longitude grid over all land domains except Antarctica. It is derived by the interpolation of monthly climate anomalies from extensive networks of weather station observations. The CRU TS version 4.05 gridded dataset is derived from observational data and provides quality-controlled temperature and rainfall values from thousands of weather stations worldwide, as well as derivative products including monthly climatologies and long-term historical climatologies. The dataset is produced by the Climatic Research Unit (CRU) of the University of East Anglia (UEA).
+- **Pollution indexes** -> The data series has been compiled  using a combination of primary official sources, and  third-party data.
+Traditionally, in bp’s Statistical Review of World Energy,  the primary energy of non-fossil based electricity  (nuclear, hydro, wind, solar, geothermal, biomass  in power and other renewables sources) has been  calculated on an ‘input-equivalent’ basis – i.e. based  on the equivalent amount of fossil fuel input required  to generate that amount of electricity in a standard  thermal power plant. For example, if nuclear power  output for a country was 100 TWh, and the efficiency  of a standard thermal power plant was 38%, the input- equivalent primary energy would be 100/0.38 = 263  TWh or about 0.95 EJ.
+Oil production data includes crude oil, shale oil,  oil sands, condensates (lease condensate or gas  condensates that require further refining) and NGLs  (natural gas liquids – ethane, LPG and naphtha  separated from the production of natural gas). Excludes  liquid fuels from other sources such as biofuels and  synthetic derivatives of coal and natural gas. This also  excludes liquid fuel adjustment factors such as refinery  processing gain. Excludes oil shales/kerogen extracted  in solid form.
+- **Natural disasters** -> [EM-DAT](https://www.emdat.be/) publishes comprehensive, global data on each disaster event – estimating the number of deaths; people affected; and economic damages, from UN reports; government records; expert opinion; and additional sources.
+
+## Code spectrum
+
+I organized my code spectrum in stages:
+ 
+1. The easiest part was to find data about CO2 yearly per country which I found on [GitHub](https://github.com/owid/co2-data), a collection of key metrics maintained by [Our World in Data](https://ourworldindata.org/co2-and-other-greenhouse-gas-emissions) and uses data from [bp](https://www.bp.com/en/global/corporate/energy-economics/statistical-review-of-world-energy/using-the-review/methodology.html.html#carbon-methodology). The only change I made is to select some of the many variables. The hard part was to do the same for temperature and precipitation. I used data from the [World Bank Group](https://climateknowledgeportal.worldbank.org/download-data), the problem is that downloads are only available per country and type (temperature and precipitation) separately. My job was to put it all together, I managed to do it with under 300 lines of code the big chunk was just repetition of this process as many times as countries chosen, both for precipitation and temperature.
+```{r eval=FALSE}
+df_pr <- read.csv("data/Italia/pr_timeseries_annual_cru_1901-2021_ITA.csv",sep=",",header=FALSE) %>%
+  as_tibble()
+
+df_pr <- df_pr[-c(1,2),-c(3:22)]
+
+df_degrees <- read.csv("data/Italia/tas_timeseries_annual_cru_1901-2021_ITA.csv",sep=",",header=FALSE) %>%
+  as_tibble()
+df_degrees_pr <-df_degrees[ -c(1,2), -c(3:22)]%>%
+  left_join(df_pr, by="V1")%>%
+  mutate(Country="Italy")
+
+df <- df %>%
+  union_all(df_degrees_pr)
+```
+
+2. Then I set up the part on natural disasters:
+```{r eval=FALSE}
+df_nd<-read.csv("data/natural-disasters.csv",sep=",",header=TRUE)
+df_nd <- df_nd %>%
+  select( Year, Country.name, Total.economic.damages.from.disasters, Number.of.total.people.affected.by.disasters, Death.rates.from.disasters) %>%
+  rename(Country=Country.name)
+```
+
+3. Now all that is left to do is to merge the two datasets together. I consciously set up the data to make this part easier. In fact, I just merged them by year and country.
+```{r merge, eval=FALSE}
+df <- left_join(df, df_CO2, by = c("Year" = "Year", "Country" = "Country"))
+```
+
+
+4. I reviewed my data and created three new variables methane_world, nitrous_oxide_world and co2_world (*Notice that with "world" I mean the set of countries selected*), based on the intuition that methane, co2 and nitrous oxide in each country do not increase the temperature of itself, it is the global emission of these greenhouse gases. 
+
+5. The dataset is ready, here is the tail.
+```{r tail, message=FALSE, warning=FALSE}
+df <- read.csv("data/final_df.csv",sep=",",header=TRUE)
+tail(df)
+# Create dataframe for 2021 used for the first graph
+df_2021<- df%>%
+  filter(Year == "2021")
+
+```
+
+
+And the explanation of the variables:
+
+- **co2** -> Annual total production-based emissions of carbon dioxide (CO2), excluding land-use change, measured in million tonnes. This is based on territorial emissions, which do not account for emissions embedded in traded goods.
+- **share_global_co2_including_luc** -> Annual total production-based emissions of carbon dioxide (CO2), including land-use change, measured as a percentage of global total production-based emissions of CO2 in the same year. This is based on territorial emissions, which do not account for emissions embedded in traded goods. Each country's share of global CO2 emissions has been calculated by Our World in Data using global CO2 emissions provided in the Global Carbon Budget dataset. Global emissions include all country emissions as well as emissions from international aviation and shipping.
+- **total_ghg** -> Total greenhouse gas emissions including land-use change and forestry, measured in million tonnes of carbon dioxide-equivalents.
+- **methane** -> Total methane emissions including land-use change and forestry, measured in million tonnes of carbon dioxide-equivalents.
+- **nitrous_oxide** -> Total nitrous oxide emissions including land-use change and forestry, measured in million tonnes of carbon dioxide-equivalents.
+- **primary_energy_consumption** -> Primary energy consumption, measured in terawatt-hours per year.
+- The **total number of people affected** is the sum of injured, requiring assistance and homeless
+- **‘All disasters’** includes all geophysical, meteorological and climate events including earthquakes, volcanic activity, landslides, drought, wildfires, storms, and flooding.
+
+
+
+
+# 3. Some graphic Illustrations
+
+A general picture can be given by a bar graph that shows the global impact of some countries as a percentage of total emissions per year. In fact, as it is known, developed countries and highly populated ones tend to pollute more. On the other hand, the poorest are the ones who suffer more from global warming, yet they need more resources (electricity, infrastructures, etc...) to improve their condition.
+```{r graph1, echo=FALSE,fig.width = 7, fig.height = 4,  fig.cap="\\label{fig:figs}Share of global CO2", fig.align='center'}
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+ggplot(df_2021, aes(x=reorder(factor(Country), share_global_co2_including_luc) , y=share_global_co2_including_luc, fill=factor(Country))) +
+  geom_bar(stat = "identity", position = "dodge")+
+  theme_classic() +
+  ggtitle("Share of global CO2, year 2021") +
+  xlab("Countries") +
+  ylab("share global CO2 in %")+
+  scale_fill_manual(values = mycolors) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size= 11))+
+  theme(legend.position = "none")+
+  theme(axis.line = element_line(color = "black"),
+        panel.grid.major = element_line(color = '#E5E5E5'))+
+  scale_y_continuous(limits=c(0, max(df_2021$share_global_co2_including_luc)), expand = c(0,0))
+```
+In this last graph, I wanted to give another interesting view of the issue. There seems to be a positive correlation between pollution and temperature, even if subtle.
+
+```{r graph2, echo=FALSE, warning=FALSE, fig.width=25, fig.height=12, fig.cap="\\label{fig:figs}Pollution (Co2) and temperature side by side from 1900 to 2020",out.width = "80%"}
+
+my_colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+               "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+               "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+               "#c49c94", "#f7b6d2")
+
+# create the first line graph with year on the x-axis and pollution on the y-axis
+graph1 <-ggplot(df, aes(x = Year, y = co2, color = Country)) +
+  geom_line(size=3) +
+  xlab("Year") +
+  ylab("CO2") + 
+  scale_color_manual(values = my_colors)+
+  ggtitle("CO2 time series by countries") +
+  theme_classic()+
+  guides(fill=guide_legend( ncolumns=8))+
+  theme(legend.position = "bottom", legend.justification = "left")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 30), legend.text = element_text(size = 24),
+        legend.title = element_text(size = 30), plot.title = element_text(size = 35))
+
+#create the second line graph with year on the x-axis and degree on the y-axis
+graph2 <- ggplot(df, aes(x = Year, y = Temperature, color = Country)) +
+  geom_line(size=3) +
+  xlab("Year") +
+  ylab("Degrees")  +
+  scale_color_manual(values = my_colors)+
+  ggtitle("Temperature time series by countries") +
+  theme_classic()+
+  guides(fill=guide_legend(nrow=2))+
+  theme(legend.position = "bottom", legend.justification = "left")+
+  theme(axis.text = element_text(size = 25),
+        axis.title = element_text(size = 30), legend.text = element_text(size = 24),
+        legend.title = element_text(size = 30), plot.title = element_text(size = 35))
+#combine the two graphs side by side
+grid.arrange(graph1, graph2, ncol = 2)
+```
+
+## Possible Improvements
+
+One idea is to include more countries, it might be the case because my sample has been selected through personal decision (not random), thus it might not be independent and identically distributed. Even though I tried to exclude personal opinions and include meaningful countries.
+
+# 4. Multiple regression model
+
+
+First of all, I chose Italy as the country of interest for the rest of the analysis, the reasoning behind is to draw conclusions on a single country. Still, the possibility of replicate the same reasoning to any other is easily achievable.
+
+In my opinion, it seems logical to use in my multiple regression model temperature (in Celsius) as the response variable and global co2, methane, nitrous oxide and three variables on natural disasters as the explanatory variables. The scope is to quantify the impact of these greenhouse gases on degrees. In other words, how much should we worry if we keep on polluting following the same trend as we did in the last decades?
+
+
+```{r}
+df = df%>%
+  filter(Country=="Italy")%>%
+  arrange(Year)%>%
+  subset(select = -c(Country, above_below_average, dummy_above_below_average, Year,
+                      share_global_co2_including_luc, co2, nitrous_oxide, total_ghg, methane))
+
+
+ols_ML <- lm(Temperature ~ ., data =df)
+
+ols_subset<-regsubsets(Temperature  ~ ., data=df)
+summ<-summary(ols_subset)
+```
+
+# 4. and 5. Subset best selection
+
+I have used the best subset selection, instead of the backward or forward methods, which fits all possible linear models ($2^p$ models to fit) and lets us analyze which are the best, on the basis of different criteria, through graphs.
+
+```{r warning=FALSE}
+# Coefficients of best
+format(coef(ols_subset,4), scientific = TRUE, digits = 3)
+```
+
+
+### Cross-validation
+
+The cross-validation method is a method that split the dataset into k folds and computes the Mean Square Error, another information criterion. I had many problems running it, and the only way to fix it was to get rid of all the NAs in the models, which I managed to achieve through a combination of the functions subset and is.finite.
+
+```{r}
+df_cross= subset(df, is.finite(as.numeric(Total.economic.damages.from.disasters)))
+df_cross= subset(df_cross, is.finite(as.numeric(methane_world)))
+p <- 4
+k <- 3
+folds <- sample (1:k,nrow(df_cross),replace =TRUE)
+cv.errors <- matrix (NA ,k, p, dimnames =list(NULL , paste (1:p) ))
+
+for(j in 1:k){
+  best.fit =regsubsets (Temperature  ~ ., data=df_cross[folds!=j,])
+  mat <- model.matrix(as.formula(best.fit$call[[2]]), df_cross[folds==j,])
+  for(i in 1:p) {
+    coefi <- coef(best.fit ,id = i)
+    xvars <- names(coefi )
+    pred <- mat[,xvars ]%*% coefi
+    cv.errors[j,i] <- as.numeric(mean((df_cross$Temperature[folds==j] - pred)^2, na.rm=TRUE))
+  }
+}
+
+cv.mean <- colMeans(cv.errors)
+cv.mean
+```
+
+
+```{r echo=FALSE, fig.cap="\\label{fig:figs}Information criteria", fig.height=8, fig.width=6, out.width="70%",message=FALSE, warning=FALSE}
+## Graphs
+par(pty="s",mfrow=c(1,4),mar=c(2,1,2,1))
+# BIC
+plot(summ$bic, type="b", pch=19,
+     xlab="Number of predictors", ylab="", main="Drop in BIC")
+abline (v=which.min(summ$bic),col = 2, lty=2)
+# Cp
+plot(summ$cp, type="b", pch=19,
+     xlab="Number of predictors", ylab="", main="Mallow' Cp")
+abline (v=which.min(summ$cp),col = 2, lty=2)
+#R2
+plot(summ$adjr2, type="b", pch=19,
+     xlab="Number of predictors", ylab="", main="Adjusted Rˆ2")
+abline (v=which.max(summ$adjr2),col = 2, lty=2)
+#Cross-validation
+plot(cv.mean ,type="b",pch=19,
+     xlab="Number of predictors",
+     ylab="CV error",main="Cross-validation")
+abline(v=which.min(cv.mean), col=2, lty=2)
+```
+
+Since I used four criteria for computing the best, I ought to choose which one to depend on for fitting my linear model. It is known that $R^2$ has many faults, and I would like to have more than two variables (it sounds more realistic for the temperature to be explained by a multitude of variables). These are the reason why I choose Cp as the information criterion. 
+This leads to the four variable selected: Precipitation, population, methane_world, Total.economic.damages.from.disasters.
+
+```{r}
+ols_ML <- lm(Temperature ~ Precipitation+population+methane_world+
+               Total.economic.damages.from.disasters, data =df)
+```
+
+
+# 6. Collinearity
+The two main ways to look at whether collinearity is present or not are through correlation matrix and VIF method. The latter is generally considered better because it considers the unadjusted coefficient of determination for regressing the ith independent variable on the remaining ones. Let's consider the case above with most regressors:
+
+```{r}
+vif(ols_ML)
+```
+
+#### Solutions to collinearity:
+1. removing variables, this allows the reduction of linear correlation between two or more variables, trivially because one of the two is not there anymore. Knowing the fact that this would change the model altogether and that the values are slightly above the threshold (10), I still decided to remove the variable population because of the consequences that would come with collinearity.
+```{r above_below_ML_test_col,message=FALSE, warning=FALSE}
+ols_ML <- lm(Temperature ~ Precipitation+methane_world+
+               Total.economic.damages.from.disasters, data =df)
+vif(ols_ML)
+```
+2. The second solution is to combine the collinear variables into a single predictor. This solution does not seem adequate in my case.
+
+# 7. Diagnostics
+In order to understand better the result it should be pointed out the fact that row 1 corresponds to the year 1900 (first year with methane_world different from NA) and 120 to the year 2019
+
+## a) Constant variance assumption
+The assumption of constant variance across observations might not be respected, then I would have to intervene with a transformation of the response or use the Weighted Least Squares.
+```{r setup_diagnostics,message=FALSE, warning=FALSE, fig.cap="\\label{fig:figs}null plot"}
+plot(ols_ML$fitted.values, ols_ML$residuals,xlab="Fitted values",ylab="Residuals")
+abline(0,0, col="red")
+
+bp_test <- bptest(ols_ML)
+bp_test
+```
+>there is not any obvious sign of non-constant variance or non-linearity, which is also confirmed by the Breusch-Pagan test that I have found by browsing online since just looking did not convince me. This test formally assesses the homoscedasticity assumption by regressing the squared residuals on the independent variables. The null hypothesis is that the variance is constant (homoscedastic).
+ 
+## b) Linearity
+
+A look at residual plots for each variable, the goal is to check linearity issues or subgroups. 
+```{r relationship_diagnostics, fig.height=4, fig.width=8, out.width = "70%", fig.cap="\\label{fig:figs}Residuals against coefficient and fitted values",  message=FALSE, warning=FALSE}
+residualPlots(ols_ML, tests=FALSE)
+```
+> My variables seem to follow the linearity assumption pretty well, except for Total.economic.damages.from.disasters that will be dealt with afterward by taking its squared root.
+
+## c) Normality assumption
+
+To address the validity of the normality assumption, we use two tools: qq-plot and shapiro test. The former is a plot that graphs on the x-axis a sample of size n from the normal distribution and on the y-axis another sample of size n from the distribution of the errors. The latter, instead,  is a test for the normality distribution of the residuals, which is supposed as the null hypothesis.
+```{r normality_assumption,message=FALSE, warning=FALSE, fig.cap="\\label{fig:figs}qq-norm"}
+qqnorm(residuals(ols_ML))
+qqline(residuals(ols_ML))
+
+shapiro.test(residuals(ols_ML))
+```
+> My plot shows a short-tail situation, which is nothing to worry about. Also, the shapiro test strongly confirms what is shown in the qq-plot.
+
+
+## d) Unusual observations 
+
+### I) Large leverage points
+
+Leverage points are values far from the variable main domain, where most data is centered. First, we have to compute $h_{ii}$, then, as a rule of thumb, if its value is above $\frac{2(p+1)}{n}$ it is considered a high leverage point. Differently with outliers, high leverage points influence the estimation of the coefficients.
+```{r leverage_points,message=FALSE, warning=FALSE}
+infl <- influence(ols_ML)
+hat <- infl$hat
+head(hat)
+
+#We verify that the sum of the leverages is indeed 4 - the number of parameters in the model.
+sum(hat)
+nrow<-sum(!is.na(df$methane_world))# because if we were to count all rows, it would count NA
+                                              # which are not included in the fitted model
+
+leverage_points<-hat[which(hat>=(2*4/nrow))] # 4=3(regressors) +1
+leverage_points
+```
+> Both the plot and the test show two leverage points, which I will deal with later. In general, it is best to delete them.
+
+### II) Outliers
+
+An outlier is a value that does not fit the actual model, there are different ways to treat them. For instance to exclude them or use robust estimators to outliers. 
+
+The method of standardized residual is used to identify them
+```{r message=FALSE, warning=FALSE}
+rsta <- rstandard(ols_ML)
+range(rsta)
+
+outlier<-rsta[which.max(rsta)]
+outlier
+```
+
+```{r outliers, echo=FALSE, fig.cap="\\label{fig:figs}Outliers", message=FALSE, warning=FALSE}
+plot(fitted(ols_ML), rsta,
+     xlab="Fitted values", ylab="standardized Residuals",
+     pch=19, cex=0.8,
+     ylim=c(-1.92,1.85))
+abline(h=0, col=2)
+```
+> As a rule of thumb we consider a data point an outlier if the modulus of its standardized residual is greater than 3. Every point in my dataset has a value represented below this threshold.
+
+### III) Influential points
+
+Influential points are a set of all the points that influence the model particularly, of course, both outliers and leverage points could also be influential points.
+```{r influential_points,message=FALSE, warning=FALSE, fig.cap="\\label{fig:figs}Cook's distance"}
+#compute the cook distance
+cook <- cooks.distance(ols_ML)
+
+influential<-cook[which.max(cook)]
+influential
+
+#exclude influential observations
+ols_cook <- lm(Temperature ~ Precipitation+methane_world+Total.economic.damages.from.disasters, data =df, subset=(cook < max (cook)))
+
+plot(ols_cook, which=4)
+```
+> 112 is both an infuential point and a leverage point, it corresponds to the year 2011
+
+# 8. Improve your model
+
+1. Remove the year 2011 (both an influential point and a leverage point)
+```{r remove_leverage,message=FALSE, warning=FALSE}
+df<-df %>%  filter(!row_number() %in% c(112))
+```
+
+
+
+2. Trasformations of Total.economic.damages.from.disasters
+```{r}
+ols_ML <- lm(Temperature ~ Precipitation + methane_world +sqrt(Total.economic.damages.from.disasters) , data =df)
+summary(ols_ML)
+```
+> It is interesting, Total.economic.damages.from.disasters was not significant when the variable population was removed, after removing the only influential point and taking the square root, it returns significant. The rest is similar to what we had before.
+
+3. Other options
+
+>Also, I could have removed more points (outliers or leverage) but it does not seem wise to do so because the degree of freedom is already pretty low, reducing them more would probably worsen the model.
+
+
+# 9. Report the coefficients and use graphics
+
+```{r}
+format(coef(ols_ML), scientific = TRUE, digits = 3)
+```
+Each coefficient reflects the effect that a unit variation has on the response variable, keeping the other ones constant.
+
+
+```{r fig.width=15,fig.height=10,out.width = "80%",fig.cap="\\label{fig:figs} Effect of the coefficients ", echo=FALSE}
+Precipitation.ols <- plot(predictorEffect("Precipitation", ols_ML, main=''), main="Precipitation")
+methane_world.ols <- plot(predictorEffect('methane_world', ols_ML, main=''), main="Methane world")
+Total_economic.ols <- plot(predictorEffect('Total.economic.damages.from.disasters', ols_ML, main=''), main="Economic damages")
+
+grid.arrange(as_grob(Precipitation.ols),as_grob(methane_world.ols)  ,as_grob(Total_economic.ols), nrow=1)
+```
+> In my situation, the estimated values are coherent with what happens in the real world. More precipitations make the temperature drop and more methane in the atmosphere makes it rise. It is also noticeable that the coefficient associated with Total.economic.damages.from.disasters has a large shaded area, this reflects a high uncertainty on its real value.
+
+
+# 10.,11.,12. Test each regressor, test a group of regressors and all. Discuss the goodness of fit
+It is possible to analyse everything with the summary and linearHypothesis, a function from the car library that computes the F-test, among other tests.
+
+
+```{r}
+summary(ols_ML)
+```
+> All variables are significant but in very different ways. If for the intercept and methane_world there is substantial evidence against the null hypothesis. For the other regressors, Precipitation and Total.economic.damages.from.disasters, this is not the case, they refer to a significant level of 5%, which for many statisticians is not enough.
+
+> Concerning goodness of fit, I refer to the adjusted $R^2$ because it is adjusted for multiple variable models, where the typical $R^2$ would increase by construction. The model explains 60% of the model variance, which is okay.
+
+I chose to test the hypothesis that both precipitation and methane_world are equal to 0 to study whether these variables are not so important, but it is precipitations that influence temperature the most.
+```{r}
+linearHypothesis(ols_ML, c("Precipitation = 0", "methane_world = 0"))
+```
+> The test is highly significant, this implies that there is enough statistical evidence to assert that the two variables are different from 0
+
+
+
+# 13. New observation
+From [an article](https://dieselnet.com/news/2022/04noaa.php) about an analysis published by US National Oceanic and Atmospheric Administration (NOAA) I have gathered that during the year 2021, an average of 1,895.7 ppb were emitted globally, 17 ppb more than during the year 2020. Thus, there has been an increase of 0.9049%. Under the assumption that methane increases yearly at the same rate, and the fact that I have the variable of methane in carbon-dioxide equivalent. I will just multiply the last value at my disposal times 1.009049 as many times as it is needed to predict a future value (2030 in my case, given 2017 as starting year).
+The other two variables, precipitations and total economic damages from disasters are assumed to stay the same from 2017 to 2030, the former because of its complexity. [Global precipitations are expected to be more frequent](https://www.epa.gov/climate-indicators/climate-change-indicators-us-and-global-precipitation), given the increase in temperature, but it varies a lot among countries. In fact, some countries are getting dryer.  
+```{r ML_prediction, message=FALSE, warning=FALSE}
+new_methane <- tail(df$methane_world, 3)[1]*(1.009049)^12
+new_total.economic.damages=tail(df$Total.economic.damages.from.disasters, 3)[1]
+new_precipitation <- tail(df$Precipitation, 3)[1] 
+
+newdata <- data.frame(Precipitation=new_precipitation, methane_world=new_methane,
+                      Total.economic.damages.from.disasters=new_total.economic.damages)
+prediction <- predict(ols_ML, newdata)
+prediction
+# %increase of temperature in degrees from 2017 to 2030
+paste(round((prediction-tail(df$Temperature, 3)[1])/tail(df$Temperature, 3)[1]*100,2), "%")
+```
+From this I conclude that the temperature, according to the model fitted and adjusted as above, will increase of about 0.3%.
+
+
+# 14. Simulation
+There exists a nice function called simulate, by giving it the model and how many simulations. It outputs simulated data, for each year in my instance, using random covariates.
+```{r}
+sim_data <- simulate(ols_ML, nsim = 6)
+sim_data
+```
+
