@@ -7,3 +7,5 @@ The analysis explores the relationships between greenhouse gas emissions, climat
 I also performed diagnostic checks to validate model assumptions, assess collinearity, and identify influential data points. Future temperature trends were simulated based on methane emissions and other factors, providing a prediction for 2030.
 
 Potential improvements include expanding the dataset to cover more countries and experimenting with advanced machine learning models to enhance predictive accuracy.
+
+Data can be found at: https://mega.nz/folder/ScE1TTAZ#UEuG5e2174CKZT0paREKVA. Be sure to inclue the folder "data" before running the script.
